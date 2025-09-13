@@ -251,6 +251,7 @@ class InteractiveBrokersClientOrderMixin(BaseMixin):
                     avg_fill_price=avg_fill_price,
                     filled=filled,
                     remaining=remaining,
+                    perm_id=perm_id,
                 )
 
     async def process_exec_details(

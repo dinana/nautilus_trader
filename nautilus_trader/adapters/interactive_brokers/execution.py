@@ -336,10 +336,13 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
             order_type = mapped_order_type_info
             time_in_force = ib_to_nautilus_time_in_force[ib_order.tif]
 
+        # Use permId if available, otherwise fallback to orderId
+        venue_id = ib_order.permId if ib_order.permId else ib_order.orderId
+
         order_status = OrderStatusReport(
             account_id=self.account_id,
             instrument_id=instrument.id,
-            venue_order_id=VenueOrderId(str(ib_order.orderId)),
+            venue_order_id=VenueOrderId(str(venue_id)),
             order_side=ib_to_nautilus_order_side[ib_order.action],
             order_type=order_type,
             time_in_force=time_in_force,
@@ -851,6 +854,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         order: Order,
         order_id: int | None = None,
         reason: str = "",
+        perm_id: int | None = None,
     ) -> None:
         if status == OrderStatus.SUBMITTED:
             self.generate_order_submitted(
@@ -861,11 +865,13 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
             )
         elif status == OrderStatus.ACCEPTED:
             if order.status != OrderStatus.ACCEPTED:
+                # Use perm_id if available, otherwise fall back to order_id
+                venue_id = perm_id if perm_id else order_id
                 self.generate_order_accepted(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
                     client_order_id=order.client_order_id,
-                    venue_order_id=VenueOrderId(str(order_id)),
+                    venue_order_id=VenueOrderId(str(venue_id)),
                     ts_event=self._clock.timestamp_ns(),
                 )
             else:
@@ -960,9 +966,12 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
                 )
                 trigger_price = instrument.make_price(converted_trigger_price)
 
+            # Use permId if available, otherwise fallback to orderId
+            venue_id = order.permId if order.permId else order.orderId
+
             venue_order_id_modified = bool(
                 nautilus_order.venue_order_id is None
-                or nautilus_order.venue_order_id != VenueOrderId(str(order.orderId)),
+                or nautilus_order.venue_order_id != VenueOrderId(str(venue_id)),
             )
 
             if total_qty != nautilus_order.quantity or price or trigger_price:
@@ -970,7 +979,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
                     strategy_id=nautilus_order.strategy_id,
                     instrument_id=nautilus_order.instrument_id,
                     client_order_id=nautilus_order.client_order_id,
-                    venue_order_id=VenueOrderId(str(order.orderId)),
+                    venue_order_id=VenueOrderId(str(venue_id)),
                     quantity=total_qty,
                     price=price,
                     trigger_price=trigger_price,
@@ -980,7 +989,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
             self._handle_order_event(
                 status=OrderStatus.ACCEPTED,
                 order=nautilus_order,
-                order_id=order.orderId,
+                order_id=venue_id,
             )
 
     def _on_order_status(
@@ -991,6 +1000,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         filled: Decimal = Decimal(0),
         remaining: Decimal = Decimal(0),
         reason: str = "",
+        perm_id: int = 0,
     ) -> None:
         if order_status in ["ApiCancelled", "Cancelled"]:
             status = OrderStatus.CANCELED
@@ -1044,6 +1054,7 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
                 status=status,
                 order=nautilus_order,
                 reason=reason,
+                perm_id=perm_id if perm_id else None,
             )
         else:
             self._log.warning(f"ClientOrderId {order_ref} not found in Cache")
@@ -1095,11 +1106,14 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
         if nautilus_order.client_order_id in self._order_avg_prices:
             info["avg_px"] = self._order_avg_prices[nautilus_order.client_order_id]
 
+        # Use permId if available, otherwise fallback to orderId
+        venue_id = execution.permId if execution.permId else execution.orderId
+
         self.generate_order_filled(
             strategy_id=nautilus_order.strategy_id,
             instrument_id=nautilus_order.instrument_id,
             client_order_id=nautilus_order.client_order_id,
-            venue_order_id=VenueOrderId(str(execution.orderId)),
+            venue_order_id=VenueOrderId(str(venue_id)),
             venue_position_id=None,
             trade_id=TradeId(execution.execId),
             order_side=OrderSide[ORDER_SIDE_TO_ORDER_ACTION[execution.side]],
@@ -1232,7 +1246,9 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
                 strategy_id=nautilus_order.strategy_id,
                 instrument_id=nautilus_order.instrument_id,  # Keep spread ID
                 client_order_id=nautilus_order.client_order_id,
-                venue_order_id=VenueOrderId(str(execution.orderId)),
+                venue_order_id=VenueOrderId(
+                    str(execution.permId if execution.permId else execution.orderId),
+                ),
                 venue_position_id=None,
                 trade_id=TradeId(execution.execId),
                 order_side=combo_order_side,
@@ -1291,7 +1307,9 @@ class InteractiveBrokersExecutionClient(LiveExecutionClient):
             leg_trade_id = TradeId(leg_trade_id_str)
 
             # Unique venue_order_id
-            leg_venue_order_id = VenueOrderId(f"{execution.orderId}-LEG-{leg_position}")
+            # Use permId if available, otherwise fallback to orderId
+            venue_id = execution.permId if execution.permId else execution.orderId
+            leg_venue_order_id = VenueOrderId(f"{venue_id}-LEG-{leg_position}")
 
             price_magnifier = self.instrument_provider.get_price_magnifier(leg_instrument_id)
             converted_execution_price = ib_price_to_nautilus_price(execution.price, price_magnifier)
